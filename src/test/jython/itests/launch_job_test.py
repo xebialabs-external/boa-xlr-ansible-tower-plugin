@@ -10,9 +10,8 @@
 
 
 import unittest
+from ansible_tower import run_job_template
 from itests import LaunchJobTask
-
-from src.main.jython.ansible_tower import run_job_template
 
 
 class LaunchJobTest(unittest.TestCase):
