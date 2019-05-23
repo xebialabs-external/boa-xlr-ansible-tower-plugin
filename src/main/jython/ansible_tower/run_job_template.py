@@ -44,6 +44,7 @@ def get_resource_id(resource, name_or_id):
 def process(task_vars):
     with session(task_vars['tower_server'], task_vars['username'], task_vars['password']):
         job = get_resource('job')
+        job_status = ""
 
         try:
             k_vars = {}
@@ -66,7 +67,7 @@ def process(task_vars):
             print("\n")
             print("```")  # started markdown code block
             res = job.launch(job_template=task_vars['jobTemplate'], monitor=False, **k_vars)
-
+            job_status = res['status']
             print "Job Launch response is %s" % res
 
 
@@ -90,10 +91,11 @@ def process(task_vars):
                 time.sleep(60)
 
                 # Get the job status
-                job_status = job.status(res['id'],detail=True)
-                print "Job Status is %s" % job_status
-                execution_node = job_status['execution_node']
-                isJobFailed = job_status['failed']
+                job_status_res = job.status(res['id'],detail=True)
+                print "Job Status is %s" % job_status_res
+                execution_node = job_status_res['execution_node']
+                job_status = job_status_res['status']
+                isJobFailed = job_status_res['failed']
 
                 if execution_node == "":
                     ## Restart the monitoring loop and loop until we have an execution_node or the job status is failed.
@@ -137,6 +139,7 @@ def process(task_vars):
                 job_monitor = job.monitor(res['id'],interval=5,**k_vars)
                 print "Job Monitor result is %s" % job_monitor
                 print "Job status is %s " % job_monitor['status']
+                job_status = job_monitor['status']
 
             else: # This is an error condition, we don't know what to monitor
                 print "Tower job execution_node not found... unable to setup job monitoring on job_id %s " % res['id']
@@ -152,7 +155,7 @@ def process(task_vars):
 
         print("* [Job %s Link](%s/#/jobs/%s)" % (res['id'], task_vars['tower_server']['url'], res['id']))
 
-        if task_vars['stopOnFailure'] and not res['status'] == 'successful':
+        if task_vars['stopOnFailure'] and not job_status == 'successful':
             raise Exception("Failed with status %s" % res['status'])
 
 
