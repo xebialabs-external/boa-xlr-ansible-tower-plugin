@@ -47,6 +47,8 @@
                   description="Wait for successful completion or fail."/>
         <property name="stopOnFailure" kind="boolean" category="input" required="false" default="true"
                   description="Fail task when job fails"/>
+        <property name="isDMZ" kind="boolean" category="input" required="false" default="false"
+                  description="Is the host part of DMZ"/>
         <!-- output params -->
         <property name="jobId" category="output"/>
         <property name="jobStatus" category="output"/>

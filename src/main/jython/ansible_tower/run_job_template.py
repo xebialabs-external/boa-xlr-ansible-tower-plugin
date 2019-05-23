@@ -76,8 +76,8 @@ def process(task_vars):
 
                 #need to wait unitl the execution_node value is populated.
 
-                # Add a 2 minute sleep between the status check calls to reduce tower server load.
-                time.sleep(60)
+                # Add a 3 second sleep between the status check calls to reduce tower server load.
+                time.sleep(3)
 
                 # Get the job status
                 job_status_res = job.status(res['id'],detail=True)
@@ -119,11 +119,13 @@ def process(task_vars):
                 #since they don't have scaled nodes, Tower records the execution_node as 'localhost'.
 
                 #In this case, we don't need to use the -h option to specify the specific execution_node
-                if execution_node == "localhost":
+                if execution_node == "localhost" or task_vars['isDMZ']:
                     ## TODO  Revert the execution_node back to the supplied cli_tower_host value (can be blank)
                     print "Revert the execution_node back to the supplied cli_tower_host value (can be blank)"
                     print("\n")
-                    #execution_node = ""
+                    cli_tower_host = task_vars['tower_server']['url'].split("//")[1]
+                    execution_node = cli_tower_host
+                    print "cli_tower_host is %s " % cli_tower_host
                 else:
                     print "Found Tower job execution_node = %s" % execution_node
                     print("\n")
