@@ -80,6 +80,12 @@ def process(task_vars):
 
             while(isJobPending):
 
+                #We need to detect when the job status is in any mode other than 'pending'
+
+                #In pending mode, the execution_node value is not yet populated, so we
+
+                #need to wait unitl the execution_node value is populated.
+
                 # Add a 2 minute sleep between the status check calls to reduce tower server load.
                 time.sleep(60)
 
@@ -96,25 +102,46 @@ def process(task_vars):
                     #The 'failed' property for the Tower job is set to 'true' for status = failed, canceled, error
                     if (isJobFailed):
                         isJobPending = False
-                        break
-
-                        # 3. We need to monitor against the 'execution_node', since this is where Tower stores the
-
-                        # stdout content (other nodes in the load balancer will not be able to respond with the stdout)
-
-                        #The execution_node only populates into the job api data once the job status is running (not pending)
-
-                        # If we have an execution_node, we can start monitoring against that execution node where the
-
-                        #stdout will be present.
-
-                else:
-                    k_vars = {}
-                    k_vars['execution_node'] = execution_node
-                    job_monitor = job.monitor(res['id'],interval=5,**k_vars)
-                    print "Job Monitor result is %s" % job_monitor
-
+                        continue
+                else: # We got the execution node
                     isJobPending = False
+                    break
+
+            print "Execution node is : %s" % execution_node
+
+            # 3. We need to monitor against the 'execution_node', since this is where Tower stores the
+
+            # stdout content (other nodes in the load balancer will not be able to respond with the stdout)
+
+            #The execution_node only populates into the job api data once the job status is running (not pending)
+
+            # If we have an execution_node, we can start monitoring against that execution node where the
+
+            #stdout will be present.
+
+            if not execution_node == "" and not isJobFailed:
+                #Check if execution_node is 'localhost'.  This occurs when the job is executing on the legacy Tower instances,
+
+                #since they don't have scaled nodes, Tower records the execution_node as 'localhost'.
+
+                #In this case, we don't need to use the -h option to specify the specific execution_node
+                if execution_node == "localhost":
+                    ## TODO  Revert the execution_node back to the supplied cli_tower_host value (can be blank)
+                    print "Revert the execution_node back to the supplied cli_tower_host value (can be blank)"
+                else:
+                    print "Found Tower job execution_node = %s" % execution_node
+
+            # We start up monitoring using the specific execution_node (scaled) or the cli_tower_host value (legacy)
+                k_vars = {}
+                k_vars['execution_node'] = execution_node
+                job_monitor = job.monitor(res['id'],interval=5,**k_vars)
+                print "Job Monitor result is %s" % job_monitor
+                print "Job status is %s " % job_monitor['status']
+
+            else: # This is an error condition, we don't know what to monitor
+                print "Tower job execution_node not found... unable to setup job monitoring on job_id %s " % res['id']
+                if isJobFailed:
+                    raise Exception("Failed with status %s" % res['status'])
 
         finally:
             print("```")
