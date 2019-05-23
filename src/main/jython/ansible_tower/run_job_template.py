@@ -13,17 +13,6 @@ from ansible_tower.connect_util import session
 import time
 
 
-def get_resource_id(resource, name_or_id):
-    if name_or_id.isdigit():
-        return int(name_or_id)
-    result = resource.list(name=name_or_id)
-    count = int(result['count'])
-    if count == 0:
-        raise Exception("Resource name '%s''%s' not found " % (resource, name_or_id))
-    if count > 1:
-        raise Exception("Too many result for resource name '%s''%s' not found " % (resource, name_or_id))
-    return int(result['results'][0]['id'])
-
 #
 
 # Launches a job and monitors its progress using the Tower CLI
@@ -45,30 +34,30 @@ def process(task_vars):
     with session(task_vars['tower_server'], task_vars['username'], task_vars['password']):
         job = get_resource('job')
         job_status = ""
-
+        inventory = None
         try:
-            k_vars = {}
-            if task_vars['inventory']:
-                result = get_resource_id(get_resource('inventory'), task_vars['inventory'])
-                print("* set inventory : {0}->{1}".format(task_vars['inventory'], result))
-                k_vars['inventory'] = result
-
+            print("\n```")  # started markdown code block
+            extraVars = task_vars['extraVars']
             if task_vars['credential']:
-                result = get_resource_id(get_resource('credential'), task_vars['credential'])
                 print("* set credentials : {0}->{1}".format(task_vars['credential'], result))
-                k_vars['credential'] = result
+                extraVars.append(u"credential: %s" % task_vars['credential'])
+            preparedExtraVars = map(lambda v: v.replace(taskPasswordToken, taskPassword),extraVars)
 
-            if task_vars['extraVars2']:
-                vars_ = str(task_vars['extraVars2'])
-                print("* set extra_vars : {0}".format(vars_))
-                # TODO: manage taskPasswordToken && taskPassword (turn hidden in waiting for...)
-                k_vars['extra_vars'] = [vars_]
+            if task_vars['inventory']:
+                print("* set inventory : {0}->{1}".format(task_vars['inventory'], result))
+                inventory = task_vars['inventory']
+                res = job.launch(job_template=task_vars['jobTemplate'], monitor=False, extra_vars=preparedExtraVars, inventory=inventory)
+            else:
+                res = job.launch(job_template=task_vars['jobTemplate'], monitor=False, extra_vars=preparedExtraVars)
+
 
             print("\n")
             print("```")  # started markdown code block
-            res = job.launch(job_template=task_vars['jobTemplate'], monitor=False, **k_vars)
+            #res = job.launch(job_template=task_vars['jobTemplate'], monitor=False, **k_vars)
             job_status = res['status']
             print "Job Launch response is %s" % res
+            print("```")
+            print("\n")  # end markdown code block
 
 
             # 2. Setup loop to check for the status of the job
@@ -93,6 +82,8 @@ def process(task_vars):
                 # Get the job status
                 job_status_res = job.status(res['id'],detail=True)
                 print "Job Status is %s" % job_status_res
+                print("```")
+                print("\n")  # end markdown code block
                 execution_node = job_status_res['execution_node']
                 job_status = job_status_res['status']
                 isJobFailed = job_status_res['failed']
@@ -110,6 +101,7 @@ def process(task_vars):
                     break
 
             print "Execution node is : %s" % execution_node
+            print("\n")
 
             # 3. We need to monitor against the 'execution_node', since this is where Tower stores the
 
@@ -130,19 +122,25 @@ def process(task_vars):
                 if execution_node == "localhost":
                     ## TODO  Revert the execution_node back to the supplied cli_tower_host value (can be blank)
                     print "Revert the execution_node back to the supplied cli_tower_host value (can be blank)"
+                    print("\n")
+                    #execution_node = ""
                 else:
                     print "Found Tower job execution_node = %s" % execution_node
+                    print("\n")
 
             # We start up monitoring using the specific execution_node (scaled) or the cli_tower_host value (legacy)
                 k_vars = {}
                 k_vars['execution_node'] = execution_node
                 job_monitor = job.monitor(res['id'],interval=5,**k_vars)
                 print "Job Monitor result is %s" % job_monitor
+                print("\n")
                 print "Job status is %s " % job_monitor['status']
+                print("\n")
                 job_status = job_monitor['status']
 
             else: # This is an error condition, we don't know what to monitor
                 print "Tower job execution_node not found... unable to setup job monitoring on job_id %s " % res['id']
+                print("\n")
                 if isJobFailed:
                     raise Exception("Failed with status %s" % res['status'])
 
@@ -151,12 +149,12 @@ def process(task_vars):
             print("\n")  # end markdown code block
 
         globals()['jobId'] = res['id']
-        globals()['jobStatus'] = res['status']
+        globals()['jobStatus'] = job_status
 
         print("* [Job %s Link](%s/#/jobs/%s)" % (res['id'], task_vars['tower_server']['url'], res['id']))
 
         if task_vars['stopOnFailure'] and not job_status == 'successful':
-            raise Exception("Failed with status %s" % res['status'])
+            raise Exception("Failed with status %s" % job_status)
 
 
 if __name__ == '__main__' or __name__ == '__builtin__':
