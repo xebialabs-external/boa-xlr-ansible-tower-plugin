@@ -39,12 +39,12 @@ def process(task_vars):
             print("\n```")  # started markdown code block
             extraVars = task_vars['extraVars']
             if task_vars['credential']:
-                print("* set credentials : {0}->{1}".format(task_vars['credential'], result))
+                #print("* set credentials : {0}->{1}".format(task_vars['credential'], result))
                 extraVars.append(u"credential: %s" % task_vars['credential'])
             preparedExtraVars = map(lambda v: v.replace(taskPasswordToken, taskPassword),extraVars)
 
             if task_vars['inventory']:
-                print("* set inventory : {0}->{1}".format(task_vars['inventory'], result))
+                #print("* set inventory : {0}->{1}".format(task_vars['inventory'], result))
                 inventory = task_vars['inventory']
                 res = job.launch(job_template=task_vars['jobTemplate'], monitor=False, extra_vars=preparedExtraVars, inventory=inventory)
             else:
