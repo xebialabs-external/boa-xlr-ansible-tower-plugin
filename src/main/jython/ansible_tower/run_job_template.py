@@ -10,6 +10,8 @@
 
 from tower_cli import get_resource
 from ansible_tower.connect_util import session
+#from tower_cli.conf import with_global_options
+from tower_cli.cli.resource import ResSubcommand
 import time
 
 
@@ -29,12 +31,15 @@ import time
 
 #
 
-
+#@click.command()
+#@with_global_options
 def process(task_vars):
     with session(task_vars['tower_server'], task_vars['username'], task_vars['password']):
         job = get_resource('job')
         job_status = ""
         inventory = None
+        # Print out the current version of Tower CLI.
+        ##click.echo('Tower CLI %s' % __version__)
         try:
             print("\n```")  # started markdown code block
             extraVars = task_vars['extraVars']
@@ -125,15 +130,21 @@ def process(task_vars):
                     print("\n")
                     cli_tower_host = task_vars['tower_server']['url'].split("//")[1]
                     execution_node = cli_tower_host
+                    globals()['tower_host']=cli_tower_host
                     print "cli_tower_host is %s " % cli_tower_host
+                    print "Global tower host is %s" % globals()['tower_host']
                 else:
                     print "Found Tower job execution_node = %s" % execution_node
                     print("\n")
 
             # We start up monitoring using the specific execution_node (scaled) or the cli_tower_host value (legacy)
-                k_vars = {}
-                k_vars['execution_node'] = execution_node
-                job_monitor = job.monitor(res['id'],interval=5,**k_vars)
+                k_vars = []
+                k_vars.append(u"tower_host: %s" % execution_node)
+                #@click.option('-h', required=True, prompt=True, hide_input=True)
+                monitor = ResSubcommand(job).get_command(None, 'monitor')
+                for param in monitor.params:
+                    print param.name
+                job_monitor = job.monitor(res['id'],interval=5,*k_vars)
                 print "Job Monitor result is %s" % job_monitor
                 print("\n")
                 print "Job status is %s " % job_monitor['status']
