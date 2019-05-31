@@ -10,8 +10,6 @@
 
 from tower_cli import get_resource
 from ansible_tower.connect_util import session
-#from tower_cli.conf import with_global_options
-from tower_cli.cli.resource import ResSubcommand
 import time
 
 
@@ -31,25 +29,19 @@ import time
 
 #
 
-#@click.command()
-#@with_global_options
 def process(task_vars):
     with session(task_vars['tower_server'], task_vars['username'], task_vars['password']):
         job = get_resource('job')
         job_status = ""
         inventory = None
-        # Print out the current version of Tower CLI.
-        ##click.echo('Tower CLI %s' % __version__)
         try:
             print("\n```")  # started markdown code block
             extraVars = task_vars['extraVars']
             if task_vars['credential']:
-                #print("* set credentials : {0}->{1}".format(task_vars['credential'], result))
                 extraVars.append(u"credential: %s" % task_vars['credential'])
             preparedExtraVars = map(lambda v: v.replace(taskPasswordToken, taskPassword),extraVars)
 
             if task_vars['inventory']:
-                #print("* set inventory : {0}->{1}".format(task_vars['inventory'], result))
                 inventory = task_vars['inventory']
                 res = job.launch(job_template=task_vars['jobTemplate'], monitor=False, extra_vars=preparedExtraVars, inventory=inventory)
             else:
@@ -58,9 +50,7 @@ def process(task_vars):
 
             print("\n")
             print("```")  # started markdown code block
-            #res = job.launch(job_template=task_vars['jobTemplate'], monitor=False, **k_vars)
             job_status = res['status']
-            print "Job Launch response is %s" % res
             print("```")
             print("\n")  # end markdown code block
 
@@ -86,7 +76,6 @@ def process(task_vars):
 
                 # Get the job status
                 job_status_res = job.status(res['id'],detail=True)
-                print "Job Status is %s" % job_status_res
                 print("```")
                 print("\n")  # end markdown code block
                 execution_node = job_status_res['execution_node']
@@ -125,14 +114,13 @@ def process(task_vars):
 
                 #In this case, we don't need to use the -h option to specify the specific execution_node
                 if execution_node == "localhost" or task_vars['isDMZ']:
-                    ## TODO  Revert the execution_node back to the supplied cli_tower_host value (can be blank)
+                    #Revert the execution_node back to the supplied cli_tower_host value (can be blank)
                     print "Revert the execution_node back to the supplied cli_tower_host value (can be blank)"
                     print("\n")
                     cli_tower_host = task_vars['tower_server']['url'].split("//")[1]
                     execution_node = cli_tower_host
                     globals()['tower_host']=cli_tower_host
                     print "cli_tower_host is %s " % cli_tower_host
-                    print "Global tower host is %s" % globals()['tower_host']
                 else:
                     print "Found Tower job execution_node = %s" % execution_node
                     print("\n")
@@ -140,12 +128,7 @@ def process(task_vars):
             # We start up monitoring using the specific execution_node (scaled) or the cli_tower_host value (legacy)
                 k_vars = []
                 k_vars.append(u"tower_host: %s" % execution_node)
-                #@click.option('-h', required=True, prompt=True, hide_input=True)
-                monitor = ResSubcommand(job).get_command(None, 'monitor')
-                for param in monitor.params:
-                    print param.name
                 job_monitor = job.monitor(res['id'],interval=5,*k_vars)
-                print "Job Monitor result is %s" % job_monitor
                 print("\n")
                 print "Job status is %s " % job_monitor['status']
                 print("\n")
