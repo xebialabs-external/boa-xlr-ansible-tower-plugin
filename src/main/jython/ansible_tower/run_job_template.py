@@ -58,28 +58,30 @@ content ['extra_vars'] = extraVarJson
 
 print "Sending payload %s" % content
 
-if jobTemplateId is None or jobTemplateId == "" and jobTemplate is not None:
-    tower_serverAPIGetTemplateUrl = tower_serverUrl + '/api/v2/system_job_templates/'
-    tower_serverAPIGetTemplateResponse = XLRequest(tower_serverAPIGetTemplateUrl, 'GET', content, credentials['username'], credentials['password'], 'application/json').send()
-    if tower_serverAPIGetTemplateResponse is not None:
-        try:
-            data = json.loads(tower_serverAPIGetTemplateResponse.read())
-            print "Tower job templates response is %s" % data
-            for result in data["results"]:
-                if result["name"]== jobTemplate:
-                    jobTemplateId = result["id"]
-                    print "Found Job template ID %s for Job Template name %s in Tower." % (result["id"], jobTemplate)
-        except ValueError, e:
-            print "Tower get job templates response is not a valid json %s" % tower_serverAPIGetTemplateResponse.read()
 
-    else:
-        print "Failed to get job templates in tower"
-        tower_serverAPIGetTemplateResponse.errorDump()
-        sys.exit(1)
+# TODO
+#if jobTemplateId is None or jobTemplateId == "" and jobTemplate is not None:
+#    tower_serverAPIGetTemplateUrl = tower_serverUrl + '/api/v2/system_job_templates/'
+#    tower_serverAPIGetTemplateResponse = XLRequest(tower_serverAPIGetTemplateUrl, 'GET', content, credentials['username'], credentials['password'], 'application/json').send()
+#    if tower_serverAPIGetTemplateResponse is not None:
+#        try:
+#            data = json.loads(tower_serverAPIGetTemplateResponse.read())
+#            print "Tower job templates response is %s" % data
+#            for result in data["results"]:
+#                if result["name"]== jobTemplate:
+#                    jobTemplateId = result["id"]
+#                    print "Found Job template ID %s for Job Template name %s in Tower." % (result["id"], jobTemplate)
+#        except ValueError, e:
+#            print "Tower get job templates response is not a valid json %s" % tower_serverAPIGetTemplateResponse.read()
+#
+#    else:
+#        print "Failed to get job templates in tower"
+#        tower_serverAPIGetTemplateResponse.errorDump()
+#        sys.exit(1)
 
 
 
-tower_serverAPILaunchUrl = tower_serverUrl + '/api/v2/job_templates/%s/launch/' % jobTemplateId
+tower_serverAPILaunchUrl = tower_serverUrl + '/api/v2/job_templates/%s/launch/' % jobTemplate
 
 tower_serverLaunchResponse = XLRequest(tower_serverAPILaunchUrl, 'POST', content, credentials['username'], credentials['password'], 'application/json').send()
 
@@ -114,7 +116,7 @@ while(isJobPending):
 
     # Add a 3 second sleep between the status check calls to reduce tower server load.
 
-    time.sleep(3)
+    time.sleep(10)
     tower_serverAPIStatusUrl = tower_serverUrl + '/api/v2/jobs/%s/' % jobId
 
     tower_serverStatusResponse = XLRequest(tower_serverAPIStatusUrl, 'GET', content, credentials['username'], credentials['password'], 'application/json').send()
@@ -138,7 +140,7 @@ while(isJobPending):
         isJobPending = True
         #Put in a circuit breaker if the job status is failed or canceled or error, we don't need to keep loopin
         #The 'failed' property for the Tower job is set to 'true' for status = failed, canceled, error
-        if (isJobFailed):
+        if (isJobFailed or jobStatus == 'successful'):
             isJobPending = False
             break
 
