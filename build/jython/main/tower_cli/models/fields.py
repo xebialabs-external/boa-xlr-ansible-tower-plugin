@@ -138,7 +138,6 @@ class ManyToManyField(BaseField):
 
         self.other_name = other_name
         self.res_name = res_name
-        self.method_name = method_name
         self.relationship = relationship
         self.method_name = None
         self._set_method_names(method_name, relationship)
@@ -161,18 +160,19 @@ class ManyToManyField(BaseField):
             self.res_name = grammar.singularize(attrs.get('endpoint', 'unknown').strip('/'))
 
     def _set_method_names(self, method_name=None, relationship=None):
-        if self.method_name is None:
-            if method_name is not None:
-                self.method_name = method_name
-                suffix = ''
-                if method_name != '':
-                    suffix = '_{}'.format(method_name)
-            elif relationship is not None:
-                suffix = '_{}'.format(grammar.singularize(relationship))
-            else:
-                return
-            self.associate_method_name = 'associate{}'.format(suffix)
-            self.disassociate_method_name = 'disassociate{}'.format(suffix)
+        if self.method_name is not None:
+            return  # provided in __init__, do not let metaclass override
+        suffix = ''
+        if method_name is not None:
+            self.method_name = method_name
+            if method_name != '':
+                suffix = '_{}'.format(method_name)
+        elif relationship is not None:
+            suffix = '_{}'.format(grammar.singularize(relationship))
+        else:
+            return
+        self.associate_method_name = 'associate{}'.format(suffix)
+        self.disassociate_method_name = 'disassociate{}'.format(suffix)
 
     @property
     def associate_method(self):
@@ -205,12 +205,12 @@ class ManyToManyField(BaseField):
 
         # Apply options for user to specify the 2 resources to associate
         method = click.option(
-            '--{}'.format(self.other_name),
+            '--{}'.format(self.other_name.replace('_', '-')),
             type=types.Related(self.other_name),
             required=True
         )(method)
         method = click.option(
-            '--{}'.format(self.res_name),
+            '--{}'.format(self.res_name.replace('_', '-')),
             type=types.Related(self.res_name),
             required=True
         )(method)

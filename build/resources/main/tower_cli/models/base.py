@@ -31,6 +31,7 @@ from click._compat import isatty as is_tty
 from tower_cli import resources, exceptions as exc
 from tower_cli.api import client
 from tower_cli.conf import settings
+from tower_cli.constants import STATUS_CHOICES
 from tower_cli.models.fields import Field, ManyToManyField
 from tower_cli.utils import parser, debug, secho
 from tower_cli.utils.data_structures import OrderedDict
@@ -164,6 +165,8 @@ class BaseResource(six.with_metaclass(ResourceMeta)):
     cli_help = ''
     endpoint = None
     identity = ('name',)
+    dependencies = []
+    related = []
 
     # The basic methods for interacting with a resource are `read`, `write`,
     # and `delete`; these cover basic CRUD situations and have options
@@ -229,6 +232,19 @@ class BaseResource(six.with_metaclass(ResourceMeta)):
                                    read_params)
             return {}
 
+    def _convert_pagenum(self, kwargs):
+        """
+        Convert next and previous from URLs to integers
+        """
+        for key in ('next', 'previous'):
+            if not kwargs.get(key):
+                continue
+            match = re.search(r'page=(?P<num>[\d]+)', kwargs[key])
+            if match is None and key == 'previous':
+                kwargs[key] = 1
+                continue
+            kwargs[key] = int(match.groupdict()['num'])
+
     def read(self, pk=None, fail_on_no_results=False, fail_on_multiple_results=False, **kwargs):
         """
         =====API DOCS=====
@@ -277,13 +293,12 @@ class BaseResource(six.with_metaclass(ResourceMeta)):
                 kwargs.pop(field.name)
 
         # If queries were provided, process them.
+        params = list(kwargs.items())
         for query in queries:
-            if query[0] in kwargs:
-                raise exc.BadRequest('Attempted to set %s twice.' % query[0].replace('_', '-'))
-            kwargs[query[0]] = query[1]
+            params.append((query[0], query[1]))
 
         # Make the request to the Ansible Tower API.
-        r = client.get(url, params=kwargs)
+        r = client.get(url, params=params)
         resp = r.json()
 
         # If this was a request with a primary key included, then at the
@@ -517,6 +532,18 @@ class BaseResource(six.with_metaclass(ResourceMeta)):
 
         =====API DOCS=====
         """
+        # TODO: Move to a field callback method to make it generic
+        # If multiple statuses where given, add OR queries for each of them
+        if kwargs.get('status', None) and ',' in kwargs['status']:
+            all_status = kwargs.pop('status').strip(',').split(',')
+            queries = list(kwargs.pop('query', ()))
+            for status in all_status:
+                if status in STATUS_CHOICES:
+                    queries.append(('or__status', status))
+                else:
+                    raise exc.TowerCLIError('This status does not exist: {}'.format(status))
+            kwargs['query'] = tuple(queries)
+
         # If the `all_pages` flag is set, then ignore any page that might also be sent.
         if all_pages:
             kwargs.pop('page', None)
@@ -526,23 +553,18 @@ class BaseResource(six.with_metaclass(ResourceMeta)):
         debug.log('Getting records.', header='details')
         response = self.read(**kwargs)
 
-        # Alter the "next" and "previous" to reflect simple integers, rather than URLs, since this endpoint
-        # just takes integers.
-        for key in ('next', 'previous'):
-            if not response.get(key):
-                continue
-            match = re.search(r'page=(?P<num>[\d]+)', response[key])
-            if match is None and key == 'previous':
-                response[key] = 1
-                continue
-            response[key] = int(match.groupdict()['num'])
+        # Convert next and previous to int
+        self._convert_pagenum(response)
 
         # If we were asked for all pages, keep retrieving pages until we have them all.
         if all_pages and response['next']:
             cursor = copy(response)
             while cursor['next']:
-                cursor = self.list(**dict(kwargs, page=cursor['next']))
+                cursor = self.read(**dict(kwargs, page=cursor['next']))
+                self._convert_pagenum(cursor)
                 response['results'] += cursor['results']
+                response['count'] += cursor['count']
+            response['next'] = None
 
         # Done; return the response
         return response
@@ -616,7 +638,10 @@ class Resource(BaseResource):
         return self.write(create_on_missing=True, **kwargs)
 
     @resources.command(ignore_defaults=True)
-    def copy(self, pk=None, **kwargs):
+    @click.option('--new-name', default=None,
+                  help='The name to give the new resource, if used, will deep copy in the backend. '
+                       'Only compatible with Tower 3.3 or later.')
+    def copy(self, pk=None, new_name=None, **kwargs):
         """Copy an object.
 
         Only the ID is used for the lookup. All provided fields are used to override the old data from the
@@ -626,6 +651,7 @@ class Resource(BaseResource):
         Copy an object.
 
         :param pk: Primary key of the resource object to be copied
+        :param new_name: The new name to give the resource if deep copying via the API
         :type pk: int
         :param `**kwargs`: Keyword arguments of fields whose given value will override the original value.
         :returns: loaded JSON of the copied new resource object.
@@ -647,10 +673,19 @@ class Resource(BaseResource):
             if field.multiple and field.name in newresource:
                 newresource[field.name] = (newresource.get(field.name),)
 
-        newresource.update(kwargs)
-        newresource['name'] = "%s @ %s" % (basename, time.strftime('%X'))
+        if new_name is None:
+            # copy client-side, the old mechanism
+            newresource['name'] = "%s @ %s" % (basename, time.strftime('%X'))
+            newresource.update(kwargs)
 
-        return self.write(create_on_missing=True, **newresource)
+            return self.write(create_on_missing=True, fail_on_found=True,
+                              **newresource)
+        else:
+            # copy server-side, the new mechanism
+            if kwargs:
+                raise exc.TowerCLIError('Cannot override {} and also use --new-name.'.format(kwargs.keys()))
+            copy_endpoint = '{}/{}/copy/'.format(self.endpoint.strip('/'), pk)
+            return client.post(copy_endpoint, data={'name': new_name}).json()
 
     @resources.command(ignore_defaults=True)
     @click.option('--create-on-missing', default=False, show_default=True, type=bool, is_flag=True,
@@ -733,20 +768,41 @@ class MonitorableResource(BaseResource):
         debug.log('Requesting a copy of job standard output', header='details')
         resp = client.get(stdout_url, params=payload).json()
         content = b64decode(resp['content'])
-
-        return content
+        return content.decode('utf-8', 'replace')
 
     @resources.command
     @click.option('--start-line', required=False, type=int, help='Line at which to start printing the standard out.')
     @click.option('--end-line', required=False, type=int, help='Line at which to end printing the standard out.')
-    def stdout(self, pk, start_line=None, end_line=None, **kwargs):
+    @click.option('--outfile', required=False, type=str, help='Destination file for stdout (default stdout)')
+    def stdout(self, pk, start_line=None, end_line=None, outfile=sys.stdout, **kwargs):
         """
-        Print out the standard out of a unified job to the command line.
+        Print out the standard out of a unified job to the command line or output file.
         For Projects, print the standard out of most recent update.
         For Inventory Sources, print standard out of most recent sync.
         For Jobs, print the job's standard out.
         For Workflow Jobs, print a status table of its jobs.
+
+        =====API DOCS=====
+        Print out the standard out of a unified job to the command line or output file.
+        For Projects, print the standard out of most recent update.
+        For Inventory Sources, print standard out of most recent sync.
+        For Jobs, print the job's standard out.
+        For Workflow Jobs, print a status table of its jobs.
+
+        :param pk: Primary key of the job resource object to be monitored.
+        :type pk: int
+        :param start_line: Line at which to start printing job output
+        :param end_line: Line at which to end printing job output
+        :param outfile: Alternative file than stdout to write job stdout to.
+        :type outfile: file
+        :param `**kwargs`: Keyword arguments used to look up job resource object to monitor if ``pk`` is
+                           not provided.
+        :returns: A dictionary containing changed=False
+        :rtype: dict
+
+        =====API DOCS=====
         """
+
         # resource is Unified Job Template
         if self.unified_job_type != self.endpoint:
             unified_job = self.last_job_data(pk, **kwargs)
@@ -757,8 +813,14 @@ class MonitorableResource(BaseResource):
             pk = unified_job['id']
 
         content = self.lookup_stdout(pk, start_line, end_line)
+        opened = False
+        if isinstance(outfile, six.string_types):
+            outfile = open(outfile, 'w')
+            opened = True
         if len(content) > 0:
-            click.echo(content, nl=1)
+            click.echo(content, nl=1, file=outfile)
+        if opened:
+            outfile.close()
 
         return {"changed": False}
 
@@ -796,13 +858,14 @@ class MonitorableResource(BaseResource):
 
         =====API DOCS=====
         """
+
         # If we do not have the unified job info, infer it from parent
         if pk is None:
             pk = self.last_job_data(parent_pk, **kwargs)['id']
         job_endpoint = '%s%s/' % (self.unified_job_type, pk)
 
         # Pause until job is in running state
-        self.wait(pk, exit_on=['running', 'successful'])
+        self.wait(pk, exit_on=['running', 'successful'], outfile=outfile)
 
         # Loop initialization
         start = time.time()
@@ -824,10 +887,10 @@ class MonitorableResource(BaseResource):
 
             # In the first moments of running the job, the standard out
             # may not be available yet
-            if not content.startswith(b"Waiting for results"):
+            if not content.startswith("Waiting for results"):
                 line_count = len(content.splitlines())
                 start_line += line_count
-                click.echo(content, nl=0)
+                click.echo(content, nl=0, file=outfile)
 
             if timeout and time.time() - start > timeout:
                 raise exc.Timeout('Monitoring aborted due to timeout.')

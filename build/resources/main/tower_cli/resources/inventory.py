@@ -25,6 +25,8 @@ class Resource(models.Resource):
     cli_help = 'Manage inventory within Ansible Tower.'
     endpoint = '/inventories/'
     identity = ('organization', 'name')
+    dependencies = ['organization']
+    related = ['host', 'group', 'inventory_source']
 
     name = models.Field(unique=True)
     description = models.Field(required=False, display=False)
@@ -37,7 +39,7 @@ class Resource(models.Resource):
                                help_text='The host_filter field. Only useful when kind=smart.')
     insights_credential = models.Field(display=False, required=False, type=types.Related('credential'))
 
-    instance_group = models.ManyToManyField('instance_group', method_name='ig')
+    instance_groups = models.ManyToManyField('instance_group', method_name='ig')
 
     @resources.command(ignore_defaults=True)
     def batch_update(self, pk=None, **kwargs):

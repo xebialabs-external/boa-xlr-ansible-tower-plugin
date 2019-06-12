@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import collections
+import json
 import os
 import stat
 import warnings
@@ -19,20 +21,22 @@ import warnings
 import click
 import six
 
+from requests.auth import HTTPBasicAuth
 from requests.exceptions import RequestException
 
 from tower_cli import __version__, exceptions as exc
 from tower_cli.api import client
-from tower_cli.conf import with_global_options, Parser, settings
-from tower_cli.utils import secho
+from tower_cli.conf import with_global_options, Parser, settings, _apply_runtime_setting
+from tower_cli.utils import secho, supports_oauth
 from tower_cli.constants import CUR_API_VERSION
+from tower_cli.cli.transfer.common import SEND_ORDER
 
-__all__ = ['version', 'config']
+__all__ = ['version', 'config', 'login', 'logout', 'receive', 'send', 'empty']
 
 
 @click.command()
 @with_global_options
-def version(**kwargs):
+def version():
     """Display full version information."""
 
     # Print out the current version of Tower CLI.
@@ -204,3 +208,198 @@ def config(key=None, value=None, scope='user', global_=False, unset=False):
             UserWarning
             )
     click.echo('Configuration updated successfully.')
+
+
+# TODO:
+# Someday it would be nice to create these for us
+# Thus the import reference to transfer.common.SEND_ORDER
+@click.command()
+@click.argument('username', required=True)
+@click.option('--password', required=True, prompt=True, hide_input=True)
+@click.option('--client-id', required=False)
+@click.option('--client-secret', required=False)
+@click.option('--scope', required=False, default='write',
+              type=click.Choice(['read', 'write']))
+@click.option('-v', '--verbose', default=None,
+              help='Show information about requests being made.', is_flag=True,
+              required=False, callback=_apply_runtime_setting, is_eager=True)
+def login(username, password, scope, client_id, client_secret, verbose):
+    """
+    Retrieves and stores an OAuth2 personal auth token.
+    """
+    if not supports_oauth():
+        raise exc.TowerCLIError(
+            'This version of Tower does not support OAuth2.0. Set credentials using tower-cli config.'
+        )
+
+    # Explicitly set a basic auth header for PAT acquisition (so that we don't
+    # try to auth w/ an existing user+pass or oauth2 token in a config file)
+
+    req = collections.namedtuple('req', 'headers')({})
+    if client_id and client_secret:
+        HTTPBasicAuth(client_id, client_secret)(req)
+        req.headers['Content-Type'] = 'application/x-www-form-urlencoded'
+        r = client.post(
+            '/o/token/',
+            data={
+                "grant_type": "password",
+                "username": username,
+                "password": password,
+                "scope": scope
+            },
+            headers=req.headers
+        )
+    elif client_id:
+        req.headers['Content-Type'] = 'application/x-www-form-urlencoded'
+        r = client.post(
+            '/o/token/',
+            data={
+                "grant_type": "password",
+                "username": username,
+                "password": password,
+                "client_id": client_id,
+                "scope": scope
+            },
+            headers=req.headers
+        )
+    else:
+        HTTPBasicAuth(username, password)(req)
+        r = client.post(
+            '/users/{}/personal_tokens/'.format(username),
+            data={"description": "Tower CLI", "application": None, "scope": scope},
+            headers=req.headers
+        )
+
+    if r.ok:
+        result = r.json()
+        result.pop('summary_fields', None)
+        result.pop('related', None)
+        if client_id:
+            token = result.pop('access_token', None)
+        else:
+            token = result.pop('token', None)
+        if settings.verbose:
+            # only print the actual token if -v
+            result['token'] = token
+        secho(json.dumps(result, indent=1), fg='blue', bold=True)
+        config.main(['oauth_token', token, '--scope=user'])
+
+
+@click.command()
+def logout():
+    """
+    Removes an OAuth2 personal auth token from config.
+    """
+    if not supports_oauth():
+        raise exc.TowerCLIError(
+            'This version of Tower does not support OAuth2.0'
+        )
+    config.main(['oauth_token', '--unset', '--scope=user'])
+
+
+@click.command()
+@with_global_options
+@click.option('--organization', required=False, multiple=True)
+@click.option('--user', required=False, multiple=True)
+@click.option('--team', required=False, multiple=True)
+@click.option('--credential_type', required=False, multiple=True)
+@click.option('--credential', required=False, multiple=True)
+@click.option('--notification_template', required=False, multiple=True)
+@click.option('--inventory_script', required=False, multiple=True)
+@click.option('--inventory', required=False, multiple=True)
+@click.option('--project', required=False, multiple=True)
+@click.option('--job_template', required=False, multiple=True)
+@click.option('--workflow', required=False, multiple=True)
+@click.option('--all', is_flag=True)
+def receive(organization=None, user=None, team=None, credential_type=None, credential=None,
+            notification_template=None, inventory_script=None, inventory=None, project=None, job_template=None,
+            workflow=None, all=None):
+    """Export assets from Tower.
+
+    'tower receive' exports one or more assets from a Tower instance
+
+    For all of the possible assets types the TEXT can either be the assets name
+    (or username for the case of a user) or the keyword all. Specifying all
+    will export all of the assets of that type.
+
+    """
+
+    from tower_cli.cli.transfer.receive import Receiver
+    receiver = Receiver()
+    assets_to_export = {}
+    for asset_type in SEND_ORDER:
+        assets_to_export[asset_type] = locals()[asset_type]
+    receiver.receive(all=all, asset_input=assets_to_export)
+
+
+@click.command()
+@with_global_options
+@click.argument('source', required=False, nargs=-1)
+@click.option('--prevent', multiple=True, required=False,
+              help='Prevents import of a specific asset type.\n'
+              'Multiple prevent options can be passed.\n'
+              'If an asset type in the prevent list tries to be imported an error will occur')
+@click.option('--exclude', multiple=True, required=False, help='Ignore specific asset type.\n'
+              'Multiple exclude options can be passed.\n'
+              'If an asset type in the exclude list tries to be imprted it will be ignored without an error')
+@click.option('--secret_management', multiple=False, required=False, default='default',
+              type=click.Choice(['default', 'prompt', 'random']),
+              help='What to do with secrets for new items.\n'
+              'default - use "password", "token" or "secret" depending on the field'
+              'prompt - prompt for the secret to use'
+              'random - generate a random string for the secret'
+              )
+@click.option('--no-color', is_flag=True,
+              help="Disable color output"
+              )
+def send(source=None, prevent=None, exclude=None, secret_management='default', no_color=False):
+    """Import assets into Tower.
+
+    'tower send' imports one or more assets into a Tower instance
+
+    The import can take either JSON or YAML.
+    Data can be sent on stdin (i.e. from tower-cli receive pipe) and/or from files
+    or directories passed as parameters.
+
+    If a directory is specified only files that end in .json, .yaml or .yml will be
+    imported. Other files will be ignored.
+    """
+
+    from tower_cli.cli.transfer.send import Sender
+    sender = Sender(no_color)
+    sender.send(source, prevent, exclude, secret_management)
+
+
+@click.command()
+@with_global_options
+@click.option('--organization', required=False, multiple=True)
+@click.option('--user', required=False, multiple=True)
+@click.option('--team', required=False, multiple=True)
+@click.option('--credential_type', required=False, multiple=True)
+@click.option('--credential', required=False, multiple=True)
+@click.option('--notification_template', required=False, multiple=True)
+@click.option('--inventory_script', required=False, multiple=True)
+@click.option('--inventory', required=False, multiple=True)
+@click.option('--project', required=False, multiple=True)
+@click.option('--job_template', required=False, multiple=True)
+@click.option('--workflow', required=False, multiple=True)
+@click.option('--all', is_flag=True)
+@click.option('--no-color', is_flag=True,
+              help="Disable color output"
+              )
+def empty(organization=None, user=None, team=None, credential_type=None, credential=None, notification_template=None,
+          inventory_script=None, inventory=None, project=None, job_template=None, workflow=None,
+          all=None, no_color=False):
+    """Empties assets from Tower.
+
+    'tower empty' removes all assets from Tower
+
+    """
+
+    # Create an import/export object
+    from tower_cli.cli.transfer.cleaner import Cleaner
+    destroyer = Cleaner(no_color)
+    assets_to_export = {}
+    for asset_type in SEND_ORDER:
+        assets_to_export[asset_type] = locals()[asset_type]
+    destroyer.go_ham(all=all, asset_input=assets_to_export)

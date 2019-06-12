@@ -18,58 +18,105 @@ import contextlib
 import copy
 import functools
 import json
+import stat
 import warnings
+
+try:
+    from urlparse import urljoin, urlparse
+except Exception:
+    from urllib.parse import urljoin, urlparse
+
 from datetime import datetime as dt
 
 from requests.exceptions import ConnectionError, SSLError
 from requests.sessions import Session
 from requests.models import Response
 from requests.packages import urllib3
-from requests.auth import AuthBase
+from requests.auth import AuthBase, HTTPBasicAuth
 
 from tower_cli import exceptions as exc
 from tower_cli.conf import settings
-from tower_cli.utils import data_structures, debug, secho
+from tower_cli.utils import data_structures, debug, secho, supports_oauth
 from tower_cli.constants import CUR_API_VERSION
 
 
 TOWER_DATETIME_FMT = r'%Y-%m-%dT%H:%M:%S.%fZ'
 
 
-class TowerTokenAuth(AuthBase):
+class BasicTowerAuth(AuthBase):
 
     def __init__(self, username, password, cli_client):
         self.username = username
         self.password = password
         self.cli_client = cli_client
+        self.use_legacy_token = settings.use_token
 
     def _acquire_token(self):
         return self.cli_client._make_request(
-            'POST', self.cli_client.prefix + 'authtoken/', [],
+            'POST', self.cli_client.get_prefix() + 'authtoken/', [],
             {'data': json.dumps({'username': self.username, 'password': self.password}),
              'headers': {'Content-Type': 'application/json'}}
         ).json()
 
     def _get_auth_token(self):
         filename = os.path.expanduser('~/.tower_cli_token.json')
+        token_json = None
         try:
             with open(filename) as f:
                 token_json = json.load(f)
-            if not isinstance(token_json, dict) or 'token' not in token_json or 'expires' not in token_json or \
-                    dt.utcnow() > dt.strptime(token_json['expires'], TOWER_DATETIME_FMT):
+            if not isinstance(token_json, dict) or self.cli_client.get_prefix() not in token_json or \
+                    'token' not in token_json[self.cli_client.get_prefix()] or \
+                    'expires' not in token_json[self.cli_client.get_prefix()] or \
+                    dt.utcnow() > dt.strptime(token_json[self.cli_client.get_prefix()]['expires'], TOWER_DATETIME_FMT):
                 raise Exception("Current token expires.")
-            return 'Token ' + token_json['token']
+            return 'Token ' + token_json[self.cli_client.get_prefix()]['token']
         except Exception as e:
             debug.log('Acquiring and caching auth token due to:\n%s' % str(e), fg='blue', bold=True)
-            token_json = self._acquire_token()
-            if not isinstance(token_json, dict) or 'token' not in token_json or 'expires' not in token_json:
-                raise exc.AuthError('Invalid Tower auth token format: %s' % json.dumps(token_json))
+            if not isinstance(token_json, dict):
+                token_json = {}
+            token_json[self.cli_client.get_prefix()] = self._acquire_token()
+            if not isinstance(token_json[self.cli_client.get_prefix()], dict) or \
+                    'token' not in token_json[self.cli_client.get_prefix()] or \
+                    'expires' not in token_json[self.cli_client.get_prefix()]:
+                raise exc.AuthError('Invalid Tower auth token format: %s' % json.dumps(
+                    token_json[self.cli_client.get_prefix()]
+                ))
             with open(filename, 'w') as f:
                 json.dump(token_json, f)
-            return 'Token ' + token_json['token']
+            try:
+                os.chmod(filename, stat.S_IRUSR | stat.S_IWUSR)
+            except Exception as e:
+                warnings.warn(
+                    'Unable to set permissions on {0} - {1} '.format(filename, e),
+                    UserWarning
+                )
+            return 'Token ' + token_json[self.cli_client.get_prefix()]['token']
 
     def __call__(self, r):
-        r.headers['Authorization'] = self._get_auth_token()
+        if 'Authorization' in r.headers:
+            return r
+        if settings.oauth_token:
+            if supports_oauth:
+                r.headers['Authorization'] = 'Bearer {}'.format(settings.oauth_token)
+                return r
+            else:
+                warnings.warn(
+                    'This version of Tower does not support OAuth2.0'
+                )
+        if self.use_legacy_token:
+            resp = self.cli_client._make_request(
+                'OPTIONS', self.cli_client.get_prefix() + 'authtoken/', [], {}
+            )
+            if resp.ok:
+                r.headers['Authorization'] = self._get_auth_token()
+            else:
+                warnings.warn(
+                    'use_token is not supported in this version of Tower '
+                    '(the Auth Token API has been replaced with OAuth2.0 support)',
+                )
+                HTTPBasicAuth(self.username, self.password)(r)
+        else:
+            HTTPBasicAuth(self.username, self.password)(r)
         return r
 
 
@@ -94,7 +141,7 @@ class Client(Session):
         verify_ssl = True
         if (settings.verify_ssl is False) or hasattr(settings, 'insecure'):
             verify_ssl = False
-        elif settings.certificate is not None:
+        elif settings.certificate:
             verify_ssl = settings.certificate
 
         # Call the superclass method.
@@ -134,8 +181,7 @@ class Client(Session):
                 'Right now it is: "%s".' % settings.host
             )
 
-    @property
-    def prefix(self):
+    def get_prefix(self, include_version=True):
         """Return the appropriate URL prefix to prepend to requests,
         based on the host provided in settings.
         """
@@ -147,26 +193,43 @@ class Client(Session):
                 'Can not verify ssl with non-https protocol. Change the '
                 'verify_ssl configuration setting to continue.'
             )
-        return '%s/api/%s/' % (host.rstrip('/'), CUR_API_VERSION)
+        # Validate that we have either an http or https based URL
+        url_pieces = urlparse(host)
+        if url_pieces[0] not in ['http', 'https']:
+            raise exc.ConnectionError('URL must be http(s), {} is not valid'.format(url_pieces[0]))
+
+        prefix = urljoin(host, '/api/')
+        if include_version:
+            # We add the / to the end of {} so that our URL has the ending slash.
+            prefix = urljoin(prefix, "{}/".format(CUR_API_VERSION))
+
+        return prefix
 
     @functools.wraps(Session.request)
     def request(self, method, url, *args, **kwargs):
         """Make a request to the Ansible Tower API, and return the
         response.
         """
+
+        # If the URL has the api/vX at the front strip it off
+        # This is common to have if you are extracting a URL from an existing object.
+        # For example, any of the 'related' fields of an object will have this
+        import re
+        url = re.sub("^/?api/v[0-9]+/", "", url)
+
         # Piece together the full URL.
-        url = '%s%s' % (self.prefix, url.lstrip('/'))
+        use_version = not url.startswith('/o/')
+        url = '%s%s' % (self.get_prefix(use_version), url.lstrip('/'))
 
         # Ansible Tower expects authenticated requests; add the authentication
         # from settings if it's provided.
         kwargs.setdefault(
             'auth',
-            TowerTokenAuth(
+            BasicTowerAuth(
                 settings.username,
                 settings.password,
                 self
-            ) if settings.use_token else (settings.username,
-                                          settings.password)
+            )
         )
 
         # POST and PUT requests will send JSON by default; make this
@@ -202,12 +265,12 @@ class Client(Session):
         # Sanity check: Did we fail to authenticate properly?
         # If so, fail out now; this is always a failure.
         if r.status_code == 401:
-            raise exc.AuthError('Invalid Tower authentication credentials.')
+            raise exc.AuthError('Invalid Tower authentication credentials (HTTP 401).')
 
         # Sanity check: Did we get a forbidden response, which means that
         # the user isn't allowed to do this? Report that.
         if r.status_code == 403:
-            raise exc.Forbidden("You don't have permission to do that.")
+            raise exc.Forbidden("You don't have permission to do that (HTTP 403).")
 
         # Sanity check: Did we get a 404 response?
         # Requests with primary keys will return a 404 if there is no response,
@@ -265,7 +328,7 @@ class Client(Session):
                                      verbose=False, format='json'):
             adapters = copy.copy(self.adapters)
             faux_adapter = FauxAdapter(
-                url_pattern=self.prefix.rstrip('/') + '%s',
+                url_pattern=self.get_prefix().rstrip('/') + '%s',
             )
 
             try:

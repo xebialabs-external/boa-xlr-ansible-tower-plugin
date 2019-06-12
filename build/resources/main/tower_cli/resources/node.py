@@ -31,7 +31,8 @@ NODE_STANDARD_FIELDS = [
 JOB_TYPES = {
     'job': 'job_template',
     'project_update': 'project',
-    'inventory_update': 'inventory_source'
+    'inventory_update': 'inventory_source',
+    'workflow_job': 'workflow'
 }
 
 
@@ -44,19 +45,46 @@ class Resource(models.Resource):
     workflow_job_template = models.Field(
         key='-W', type=types.Related('workflow'))
     unified_job_template = models.Field(required=False)
+
+    # Prompts
+    extra_data = models.Field(type=types.Variables(), required=False,
+                              display=False, help_text='Extra data for '
+                              'schedule rules in the form of a .json file.')
     inventory = models.Field(
         type=types.Related('inventory'), required=False, display=False)
     credential = models.Field(
         type=types.Related('credential'), required=False, display=False)
+    credentials = models.ManyToManyField('credential')
     job_type = models.Field(required=False, display=False)
     job_tags = models.Field(required=False, display=False)
     skip_tags = models.Field(required=False, display=False)
     limit = models.Field(required=False, display=False)
+    diff_mode = models.Field(type=bool, required=False, display=False)
+    verbosity = models.Field(
+        display=False,
+        type=types.MappedChoice([
+            (0, 'default'),
+            (1, 'verbose'),
+            (2, 'more_verbose'),
+            (3, 'debug'),
+            (4, 'connection'),
+            (5, 'winrm'),
+        ]),
+        required=False,
+    )
 
     def __new__(cls, *args, **kwargs):
-        for attr in ['create', 'modify', 'list']:
-            setattr(cls, attr,
-                    unified_job_template_options(getattr(cls, attr)))
+        for attr_name in ['create', 'modify', 'list']:
+
+            attr = getattr(cls, attr_name)
+            if getattr(attr, '__decorator__', None) == 'unified_job_template_options':
+                continue
+
+            wrapped_func = unified_job_template_options(attr)
+            wrapped_func.__decorator__ = 'unified_job_template_options'
+
+            setattr(cls, attr_name, wrapped_func)
+
         return super(Resource, cls).__new__(cls, *args, **kwargs)
 
     @staticmethod

@@ -24,6 +24,7 @@ from tower_cli.api import client
 from tower_cli.conf import pop_option
 from tower_cli.cli import types
 from tower_cli.utils.data_structures import OrderedDict
+from tower_cli.utils import debug
 
 
 class Resource(models.Resource):
@@ -149,13 +150,24 @@ class Resource(models.Resource):
         if key == 'LICENSE':
             return json.loads(value)
         r = client.options(self.endpoint)
+        if key not in r.json()['actions']['PUT']:
+            raise exc.TowerCLIError('You are trying to modify value of a '
+                                    'Read-Only field, which is not allowed')
         to_type = r.json()['actions']['PUT'].get(key, {}).get('type')
         if to_type == 'integer':
-            return int(value)
+            if value != 'null':
+                return int(value)
+            else:
+                return None
         elif to_type == 'boolean':
             return bool(strtobool(value))
         elif to_type in ('list', 'nested object'):
-            return ast.literal_eval(value)
+            try:
+                return json.loads(value)
+            except Exception:
+                debug.log('Could not parse value as JSON, trying as python.',
+                          header='details')
+                return ast.literal_eval(value)
         return value
 
     def __getattribute__(self, name):

@@ -31,7 +31,10 @@ RESOURCE_FIELDS = [
 
 ROLE_TYPES = [
     'admin', 'read', 'member', 'execute', 'adhoc', 'update',
-    'use', 'auditor']
+    'use', 'auditor', 'project_admin', 'inventory_admin',
+    'credential_admin', 'workflow_admin', 'notification_admin',
+    'job_template_admin'
+]
 
 
 class Resource(models.Resource):
@@ -189,10 +192,13 @@ class Resource(models.Resource):
             item_dict['resource_name'] = None
             item_dict['resource_type'] = None
         else:
-            item_dict['resource_name'] = item_dict[
-                'summary_fields']['resource_name']
-            item_dict['resource_type'] = item_dict[
-                'summary_fields']['resource_type']
+            sf = item_dict['summary_fields']
+            # Explination of fallback state:
+            # The situation where resource_name or resource_type is not present
+            # should not be seen for singleton roles, and where it is seen,
+            # there may be a problem with data quality on the server
+            item_dict['resource_name'] = sf.get('resource_name', '[unknown]')
+            item_dict['resource_type'] = sf.get('resource_type', '[unknown]')
 
     def set_display_columns(self, set_true=[], set_false=[]):
         """Add or remove columns from the output."""

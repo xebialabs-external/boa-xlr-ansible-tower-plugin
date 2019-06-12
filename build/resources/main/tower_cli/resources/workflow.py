@@ -155,6 +155,9 @@ class Resource(models.SurveyResource):
     cli_help = 'Manage workflow job templates.'
     endpoint = '/workflow_job_templates/'
     unified_job_type = '/workflow_jobs/'
+    dependencies = ['organization']
+    related = ['survey_spec', 'workflow_nodes', 'schedules', 'labels']
+    workflow_node_types = ['success_nodes', 'failure_nodes', 'always_nodes']
 
     name = models.Field(unique=True)
     description = models.Field(required=False, display=False)
@@ -174,7 +177,14 @@ class Resource(models.SurveyResource):
         help_text='On write commands, perform extra POST to the '
                   'survey_spec endpoint.')
 
-    labels = models.ManyToManyField('label')
+    labels = models.ManyToManyField('label', res_name='workflow')
+
+    ask_variables_on_launch = models.Field(
+        type=bool, required=False, display=False,
+        help_text='Prompt user for extra_vars on launch.')
+    ask_inventory_on_launch = models.Field(
+        type=bool, required=False, display=False,
+        help_text='Prompt user for inventory on launch.')
 
     @staticmethod
     def _workflow_node_structure(node_results):
@@ -224,15 +234,15 @@ class Resource(models.SurveyResource):
                         ret_dict[ujt_key] = val
                     else:
                         ret_dict[fd] = val
-                for rel in ['success', 'failure', 'always']:
-                    sub_node_id_list = node_dict['{0}_nodes'.format(rel)]
-                    if len(sub_node_id_list) == 0:
-                        continue
-                    relationship_name = '{0}_nodes'.format(rel)
-                    ret_dict[relationship_name] = []
-                    for sub_node_id in sub_node_id_list:
-                        ret_dict[relationship_name].append(
-                            branch_schema(sub_node_id))
+            for rel in ['success', 'failure', 'always']:
+                sub_node_id_list = node_dict['{0}_nodes'.format(rel)]
+                if len(sub_node_id_list) == 0:
+                    continue
+                relationship_name = '{0}_nodes'.format(rel)
+                ret_dict[relationship_name] = []
+                for sub_node_id in sub_node_id_list:
+                    ret_dict[relationship_name].append(
+                        branch_schema(sub_node_id))
             return ret_dict
 
         schema_dict = []

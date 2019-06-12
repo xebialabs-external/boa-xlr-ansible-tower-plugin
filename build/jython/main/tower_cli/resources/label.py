@@ -24,6 +24,7 @@ class Resource(models.Resource):
     """A resource for labels."""
     cli_help = 'Manage labels within Ansible Tower.'
     endpoint = '/labels/'
+    related = ['organization']
 
     name = models.Field(unique=True)
     organization = models.Field(type=types.Related('organization'), display=False)
@@ -85,7 +86,7 @@ class Resource(models.Resource):
                                             ' "associate_label" method of job_template instead.')
                 else:
                     debug.log('Label already exists, associating with job template.', header='details')
-                    return jt.associate_label(jt_id, label_id)
+                    return jt.associate_label(job_template=jt_id, label=label_id)
             self.endpoint = '/job_templates/%d/labels/' % jt_id
         result = super(Resource, self).create(fail_on_found=fail_on_found, force_on_exists=force_on_exists, **kwargs)
         self.endpoint = old_endpoint

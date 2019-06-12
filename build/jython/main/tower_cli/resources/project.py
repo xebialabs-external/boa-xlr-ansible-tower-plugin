@@ -26,6 +26,8 @@ class Resource(models.Resource, models.MonitorableResource):
     cli_help = 'Manage projects within Ansible Tower.'
     endpoint = '/projects/'
     unified_job_type = '/project_updates/'
+    dependencies = ['organization', 'credential']
+    related = ['notification_templates', 'schedules']
 
     name = models.Field(unique=True)
     description = models.Field(required=False, display=False)
@@ -38,7 +40,7 @@ class Resource(models.Resource, models.MonitorableResource):
             ('hg', 'hg'),
             ('svn', 'svn'),
             ('insights', 'insights'),
-        ]),
+        ]), required=False
     )
     scm_url = models.Field(required=False)
     local_path = models.Field(
@@ -57,6 +59,7 @@ class Resource(models.Resource, models.MonitorableResource):
     scm_update_cache_timeout = models.Field(type=int, required=False, display=False)
     job_timeout = models.Field(type=int, required=False, display=False,
                                help_text='The timeout field (in seconds).')
+    custom_virtualenv = models.Field(required=False, display=False)
 
     @resources.command
     @click.option('--monitor', is_flag=True, default=False,
@@ -112,7 +115,7 @@ class Resource(models.Resource, models.MonitorableResource):
             # Processing the organization flag depends on version
             debug.log('Checking Organization Relationship.', header='details')
             r = client.options('/projects/')
-            if 'organization' in r.json()['actions']['POST']:
+            if 'organization' in r.json().get('actions', {}).get('POST', {}):
                 kwargs['organization'] = organization
             else:
                 post_associate = True
@@ -148,7 +151,7 @@ class Resource(models.Resource, models.MonitorableResource):
     @resources.command(use_fields_as_options=(
         'name', 'description', 'scm_type', 'scm_url', 'local_path',
         'scm_branch', 'scm_credential', 'scm_clean', 'scm_delete_on_update',
-        'scm_update_on_launch', 'job_timeout'
+        'scm_update_on_launch', 'job_timeout', 'custom_virtualenv'
     ))
     def modify(self, pk=None, create_on_missing=False, **kwargs):
         """Modify an already existing.

@@ -11,7 +11,8 @@
 import time
 import json
 import sys
-
+from xlrelease.HttpRequest import HttpRequest
+from ansible_tower.AnsibleTowerClient import AnsibleTowerClient
 
 #
 
@@ -36,74 +37,58 @@ if tower_server is None:
 
 tower_serverUrl = tower_server['url']
 
-credentials = CredentialsFallback(tower_server, username, password).getCredentials()
 
 # Construct the payload.
 
-content = {}
+contentRaw = {}
 
-extraVarData = json.dumps(extraVars)
-extraVarJson = json.loads(extraVarData)
+extraVarsDict = {}
+for data in extraVars:
+    i = data.split(':')
+    extraVarsDict[i[0]] = i[1]
 
-extraVarJson['taskPassword'] = taskPassword
-extraVarJson['taskPasswordToken'] = taskPasswordToken
+extraVarsDict['taskPassword'] = taskPassword
+extraVarsDict['taskPasswordToken'] = taskPasswordToken
 
 if credential:
-    content['credential'] = credential
+    contentRaw['credential'] = credential
 
 if inventory:
-    content['inventory'] = inventory
+    contentRaw['inventory'] = inventory
 
-content ['extra_vars'] = extraVarJson
+contentRaw['extra_vars'] = extraVarsDict
+
+content = json.dumps(contentRaw)
 
 print "Sending payload %s" % content
 
 
-# TODO
-#if jobTemplateId is None or jobTemplateId == "" and jobTemplate is not None:
-#    tower_serverAPIGetTemplateUrl = tower_serverUrl + '/api/v2/system_job_templates/'
-#    tower_serverAPIGetTemplateResponse = XLRequest(tower_serverAPIGetTemplateUrl, 'GET', content, credentials['username'], credentials['password'], 'application/json').send()
-#    if tower_serverAPIGetTemplateResponse is not None:
-#        try:
-#            data = json.loads(tower_serverAPIGetTemplateResponse.read())
-#            print "Tower job templates response is %s" % data
-#            for result in data["results"]:
-#                if result["name"]== jobTemplate:
-#                    jobTemplateId = result["id"]
-#                    print "Found Job template ID %s for Job Template name %s in Tower." % (result["id"], jobTemplate)
-#        except ValueError, e:
-#            print "Tower get job templates response is not a valid json %s" % tower_serverAPIGetTemplateResponse.read()
-#
-#    else:
-#        print "Failed to get job templates in tower"
-#        tower_serverAPIGetTemplateResponse.errorDump()
-#        sys.exit(1)
-
-
-
-tower_serverAPILaunchUrl = tower_serverUrl + '/api/v2/job_templates/%s/launch/' % jobTemplate
-
-tower_serverLaunchResponse = XLRequest(tower_serverAPILaunchUrl, 'POST', content, credentials['username'], credentials['password'], 'application/json').send()
+towerClient = AnsibleTowerClient.create_client(tower_server, username, password)
+tower_serverLaunchResponse = towerClient.launch(jobTemplate, content)
 
 jobId = ''
 
 
 if tower_serverLaunchResponse is not None:
+    print("\n")
     try:
-        data = json.loads(tower_serverLaunchResponse.read())
-        print "Tower job launch response is %s" % data
+        data = json.loads(tower_serverLaunchResponse)
+        print "Tower job launch response is %s" %  data
         jobId = data["id"]
         print "Started %s in Tower." % (jobId)
     except ValueError, e:
-        print "Tower job launch response is not a valid json %s" % tower_serverLaunchResponse.read()
+        print "Tower job launch response is not a valid json %s" % tower_serverLaunchResponse
+    except KeyError, e:
+        print "Tower job launch response is not a valid json %s" % tower_serverLaunchResponse
 
 else:
     print "Failed to start job in tower"
-    tower_serverLaunchResponse.errorDump()
     sys.exit(1)
 
+print("\n")
+
 jobStatus = ''
-executionNode = ''
+execution_node = ''
 isJobFailed = False
 isJobPending = True
 
@@ -115,39 +100,50 @@ while(isJobPending):
     #need to wait unitl the execution_node value is populated.
 
     # Add a 3 second sleep between the status check calls to reduce tower server load.
-
     time.sleep(10)
-    tower_serverAPIStatusUrl = tower_serverUrl + '/api/v2/jobs/%s/' % jobId
 
-    tower_serverStatusResponse = XLRequest(tower_serverAPIStatusUrl, 'GET', content, credentials['username'], credentials['password'], 'application/json').send()
+    if(execution_node == ""):
+        tower_serverStatusResponse = towerClient.status(jobId)
+
+    else:
+        print "Found Tower job execution_node = %s" % execution_node
+        print("\n")
+        if execution_node == "localhost" or isDMZ:
+            #Revert the execution_node back to the supplied cli_tower_host value (can be blank)
+            print "Revert the execution_node back to the supplied cli_tower_host value (can be blank)"
+            print("\n")
+            cli_tower_host = tower_server['url'].split("//")[1]
+            execution_node = cli_tower_host
+            print "cli_tower_host is %s " % cli_tower_host
+
+        tower_serverAPIStatusUrl = 'https://' + execution_node
+        towerClient = AnsibleTowerClient.create_client({'url':tower_serverAPIStatusUrl}, username, password)
+        tower_serverStatusResponse = towerClient.status(jobId)
+
 
     if tower_serverStatusResponse is not None:
+        print("\n")
         try:
-            data = json.loads(tower_serverStatusResponse.read())
+            data = json.loads(tower_serverStatusResponse.getResponse())
             jobStatus = data["status"]
             isJobFailed = data["failed"]
-            executionNode = data["execution_node"]
+            execution_node = data["execution_node"]
             print "Status for Job %s in Tower is %s." % (jobId,jobStatus)
         except ValueError, e:
-            print "Tower job launch response is not a valid json %s" % tower_serverStatusResponse.read()
+            print "Tower job status response is not a valid json %s" % tower_serverStatusResponse.response
+        except KeyError, e:
+            print "Tower job status response is not a valid json %s" % tower_serverStatusResponse.response
     else:
         print "Failed to get status from tower"
-        tower_serverStatusResponse.errorDump()
         sys.exit(1)
 
-    if executionNode == "" and not isJobFailed:
-        ## Restart the monitoring loop and loop until we have an execution_node or the job status is failed.
-        isJobPending = True
-        #Put in a circuit breaker if the job status is failed or canceled or error, we don't need to keep loopin
-        #The 'failed' property for the Tower job is set to 'true' for status = failed, canceled, error
-        if (isJobFailed or jobStatus == 'successful'):
-            isJobPending = False
-            break
+    if isJobFailed or jobStatus == 'successful':
+        isJobPending = False
+        break
 
 
-print "Execution node is : %s" % execution_node
+
 print("\n")
-
 
 
 # 3. We need to monitor against the 'execution_node', since this is where Tower stores the
@@ -180,22 +176,28 @@ if not execution_node == "":
 
         # We start up monitoring using the specific execution_node (scaled) or the cli_tower_host value (legacy)
 
-    try:
-        tower_serverAPIStdOutUrl = 'https://' + executionNode + '/api/v2/jobs/%s/stdout?format=json' % jobId
-        tower_serverAPIStdOutResponse = XLRequest(tower_serverAPIStdOutUrl, 'GET', content, credentials['username'], credentials['password'], 'application/json').send()
+    tower_serverAPIStdOutUrl = 'https://' + execution_node
 
-        if tower_serverAPIStdOutResponse is not None:
-            data = json.loads(tower_serverAPIStdOutResponse.read())
+    towerClient = AnsibleTowerClient.create_client({'url':tower_serverAPIStdOutUrl}, username, password)
+    tower_serverAPIStdOutResponse = towerClient.stdout(jobId)
+
+    if tower_serverAPIStdOutResponse is not None:
+        print("\n")
+        try:
+            data = json.loads(tower_serverAPIStdOutResponse.getResponse())
             stdout = data["content"]
 
-            print "Status in Tower is %s." % tower_serverAPIStdOutResponse.read()
-        else:
-            print "Failed to get status from tower"
-            tower_serverAPIStdOutResponse.errorDump()
-            sys.exit(1)
-    except e:
-        print "Tower stdout response error %s" % tower_serverAPIStdOutResponse.read()
+            print "Status in Tower is %s." % stdout
 
+        except ValueError, e:
+            print "Tower stdout response error %s" % tower_serverAPIStdOutResponse.response
+        except KeyError, e:
+            print "Tower stdout response error %s" % tower_serverAPIStdOutResponse.response
+    else:
+        print "Failed to get status from tower"
+        sys.exit(1)
+
+print("\n")
 
 print("* [Job %s Link](%s/#/jobs/%s)" % (jobId, tower_server['url'], jobId))
 

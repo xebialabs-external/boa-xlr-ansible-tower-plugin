@@ -23,6 +23,7 @@ import os
 import stat
 import warnings
 from functools import wraps
+from sys import argv
 
 import six
 from six.moves import configparser
@@ -35,11 +36,21 @@ __all__ = ['settings', 'with_global_options', 'pop_option']
 tower_dir = '/etc/tower/'
 user_dir = os.path.expanduser('~')
 CONFIG_FILENAME = '.tower_cli.cfg'
-CONFIG_OPTIONS = frozenset((
-    'host', 'username', 'password', 'verify_ssl', 'format',
-    'color', 'verbose', 'description_on', 'certificate',
-    'use_token'
-))
+CONFIG_PARAM_TYPE = {
+    'host': click.STRING,
+    'username': click.STRING,
+    'password': click.STRING,
+    'verify_ssl': click.BOOL,
+    'format': click.Choice,
+    'color': click.BOOL,
+    'verbose': click.BOOL,
+    'description_on': click.BOOL,
+    'certificate': click.STRING,
+    'use_token': click.BOOL,
+    'oauth_token': click.STRING
+}
+
+CONFIG_OPTIONS = frozenset(CONFIG_PARAM_TYPE.keys())
 
 
 class Parser(configparser.ConfigParser):
@@ -59,7 +70,7 @@ class Parser(configparser.ConfigParser):
         # other users, raise a warning
         if os.path.isfile(fpname):
             file_permission = os.stat(fpname)
-            if fpname != os.path.join(tower_dir, CONFIG_FILENAME) and (
+            if fpname != os.path.join(tower_dir, 'tower_cli.cfg') and (
                 (file_permission.st_mode & stat.S_IRGRP) or
                 (file_permission.st_mode & stat.S_IROTH)
             ):
@@ -162,7 +173,7 @@ class Settings(object):
 
             # If there is a global settings file for Tower CLI, read in its
             # contents.
-            self._global.read(os.path.join(tower_dir, CONFIG_FILENAME))
+            self._global.read(os.path.join(tower_dir, 'tower_cli.cfg'))
 
         # Initialize a parser for the user settings file.
         self._user = self._new_parser()
@@ -218,16 +229,18 @@ class Settings(object):
             except configparser.NoOptionError:
                 continue
 
-            # We have a value; it may or may not be a string, though, so
-            # try to return it as an int, float, or boolean (in that order)
-            # before falling back to the string value.
-            type_method = ('getint', 'getfloat', 'getboolean')
-            for tm in type_method:
-                try:
-                    value = getattr(parser, tm)('general', key)
-                    break
-                except ValueError:
-                    pass
+            # We have a value; try to get its type and return it accordingly
+            try:
+                if CONFIG_PARAM_TYPE[key] == click.STRING or CONFIG_PARAM_TYPE[key] == click.Choice:
+                    value = parser.get('general', key)
+                elif CONFIG_PARAM_TYPE[key] == click.BOOL:
+                    value = parser.getboolean('general', key)
+                elif CONFIG_PARAM_TYPE[key] == click.FLOAT:
+                    value = parser.getfloat('general', key)
+                elif CONFIG_PARAM_TYPE[key] == click.INT:
+                    value = parser.getint('general', key)
+            except ValueError:
+                click.secho('Value for %s is not in expected type' % key)
 
             # Write the value to the cache, so we don't have to do this lookup
             # logic on subsequent requests.
@@ -340,21 +353,21 @@ settings = Settings()
 
 
 def _apply_runtime_setting(ctx, param, value):
+    if param.name == 'tower_password' and value == 'ASK' and '--help' not in argv:
+        value = click.prompt('Enter tower password', type=str, hide_input=True, err=True)
     settings.set_or_reset_runtime_param(param.name, value)
 
 
 SETTINGS_PARMS = set([
-    'tower_host', 'tower_password', 'format', 'tower_username', 'verbose',
-    'description_on', 'insecure', 'certificate', 'use_token'
+    'tower_host', 'tower_oauth_token', 'tower_password', 'format',
+    'tower_username', 'verbose', 'description_on', 'insecure', 'certificate',
+    'use_token'
 ])
 
 
 def runtime_context_manager(method):
     @wraps(method)
     def method_with_context_managed(*args, **kwargs):
-        # Remove the settings before running the method
-        for key in SETTINGS_PARMS:
-            kwargs.pop(key, None)
         method(*args, **kwargs)
         # Destroy the runtime settings
         settings._runtime = settings._new_parser()
@@ -376,7 +389,17 @@ def with_global_options(method):
              'provided. This will take precedence over a host provided to '
              '`tower config`, if any.',
         required=False, callback=_apply_runtime_setting,
-        is_eager=True
+        is_eager=True,
+        expose_value=False
+    )(method)
+    method = click.option(
+        '-t', '--tower-oauth-token',
+        help='OAuth2 token to use to authenticate to Ansible Tower. '
+             'This will take precedence over a token provided to '
+             '`tower config`, if any.',
+        required=False, callback=_apply_runtime_setting,
+        is_eager=True,
+        expose_value=False
     )(method)
     method = click.option(
         '-u', '--tower-username',
@@ -384,15 +407,18 @@ def with_global_options(method):
              'This will take precedence over a username provided to '
              '`tower config`, if any.',
         required=False, callback=_apply_runtime_setting,
-        is_eager=True
+        is_eager=True,
+        expose_value=False
     )(method)
     method = click.option(
         '-p', '--tower-password',
         help='Password to use to authenticate to Ansible Tower. '
              'This will take precedence over a password provided to '
-             '`tower config`, if any.',
+             '`tower config`, if any. If value is ASK you will be '
+             'prompted for the password',
         required=False, callback=_apply_runtime_setting,
-        is_eager=True
+        is_eager=True,
+        expose_value=False
     )(method)
 
     # Create a global verbose/debug option.
@@ -403,7 +429,8 @@ def with_global_options(method):
              'provide more data, and "id" echos the object id only.',
         type=click.Choice(['human', 'json', 'yaml', 'id']),
         required=False, callback=_apply_runtime_setting,
-        is_eager=True
+        is_eager=True,
+        expose_value=False
     )(method)
     method = click.option(
         '-v', '--verbose',
@@ -411,7 +438,8 @@ def with_global_options(method):
         help='Show information about requests being made.',
         is_flag=True,
         required=False, callback=_apply_runtime_setting,
-        is_eager=True
+        is_eager=True,
+        expose_value=False
     )(method)
     method = click.option(
         '--description-on',
@@ -419,7 +447,8 @@ def with_global_options(method):
         help='Show description in human-formatted output.',
         is_flag=True,
         required=False, callback=_apply_runtime_setting,
-        is_eager=True
+        is_eager=True,
+        expose_value=False
     )(method)
 
     # Create a global SSL warning option.
@@ -430,7 +459,8 @@ def with_global_options(method):
              'to make this permanent.',
         is_flag=True,
         required=False, callback=_apply_runtime_setting,
-        is_eager=True
+        is_eager=True,
+        expose_value=False
     )(method)
 
     # Create a custom certificate specification option.
@@ -440,17 +470,19 @@ def with_global_options(method):
         help='Path to a custom certificate file that will be used throughout'
              ' the command. Overwritten by --insecure flag if set.',
         required=False, callback=_apply_runtime_setting,
-        is_eager=True
+        is_eager=True,
+        expose_value=False
     )(method)
 
     method = click.option(
         '--use-token',
         default=None,
-        help='Turn on Tower\'s token-based authentication. Set config'
-             ' use_token to make this permanent.',
+        help='Turn on Tower\'s token-based authentication. No longer supported '
+             'in Tower 3.3 and above.',
         is_flag=True,
         required=False, callback=_apply_runtime_setting,
-        is_eager=True
+        is_eager=True,
+        expose_value=False
     )(method)
     # Manage the runtime settings context
     method = runtime_context_manager(method)

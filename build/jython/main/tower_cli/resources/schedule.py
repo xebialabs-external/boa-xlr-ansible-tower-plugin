@@ -23,6 +23,7 @@ UNIFIED_JT = {
     'job_template': '/job_templates',
     'inventory_source': '/inventory_sources',
     'project': '/projects',
+    'workflow': '/workflow_job_templates',
 }
 CLICK_ATTRS = ('__click_params__', '_cli_command', '_cli_command_attrs')
 
@@ -110,6 +111,9 @@ class Resource(models.Resource):
                                     required=False, display=False)
     project = models.Field(type=types.Related('project'), required=False,
                            display=False)
+    workflow = models.Field(
+        type=types.Related('workflow'), required=False, display=False
+    )
 
     # Schedule-specific fields.
     unified_job_template = models.Field(required=False, type=int,
@@ -123,9 +127,31 @@ class Resource(models.Resource):
     rrule = models.Field(required=False, display=False,
                          help_text='Schedule rules specifications which is'
                          ' less than 255 characters.')
+
+    # Prompts
     extra_data = models.Field(type=types.Variables(), required=False,
                               display=False, help_text='Extra data for '
                               'schedule rules in the form of a .json file.')
+    inventory = models.Field(
+        type=types.Related('inventory'), required=False, display=False)
+    credentials = models.ManyToManyField('credential')
+    job_type = models.Field(required=False, display=False)
+    job_tags = models.Field(required=False, display=False)
+    skip_tags = models.Field(required=False, display=False)
+    limit = models.Field(required=False, display=False)
+    diff_mode = models.Field(type=bool, required=False, display=False)
+    verbosity = models.Field(
+        display=False,
+        type=types.MappedChoice([
+            (0, 'default'),
+            (1, 'verbose'),
+            (2, 'more_verbose'),
+            (3, 'debug'),
+            (4, 'connection'),
+            (5, 'winrm'),
+        ]),
+        required=False,
+    )
 
     def _get_patch_url(self, url, pk):
         urlTokens = url.split('/')
