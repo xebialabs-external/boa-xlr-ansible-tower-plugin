@@ -44,7 +44,7 @@ contentRaw = {}
 
 extraVarsDict = {}
 for data in extraVars:
-    i = data.split(':')
+    i = data.split(': ')
     extraVarsDict[i[0]] = i[1]
 
 extraVarsDict['taskPassword'] = taskPassword
@@ -117,7 +117,7 @@ while(isJobPending):
             print "cli_tower_host is %s " % cli_tower_host
 
         tower_serverAPIStatusUrl = 'https://' + execution_node
-        towerClient = AnsibleTowerClient.create_client({'url':tower_serverAPIStatusUrl}, username, password)
+        towerClient = AnsibleTowerClient.create_client({'url':tower_serverAPIStatusUrl}, tower_server['username'], tower_server['password'])
         tower_serverStatusResponse = towerClient.status(jobId)
 
 
@@ -178,7 +178,7 @@ if not execution_node == "":
 
     tower_serverAPIStdOutUrl = 'https://' + execution_node
 
-    towerClient = AnsibleTowerClient.create_client({'url':tower_serverAPIStdOutUrl}, username, password)
+    towerClient = AnsibleTowerClient.create_client({'url':tower_serverAPIStdOutUrl}, tower_server['username'], tower_server['password'])
     tower_serverAPIStdOutResponse = towerClient.stdout(jobId)
 
     if tower_serverAPIStdOutResponse is not None:
@@ -201,5 +201,6 @@ print("\n")
 
 print("* [Job %s Link](%s/#/jobs/%s)" % (jobId, tower_server['url'], jobId))
 
-if stopOnFailure and not jobStatus == 'successful':
+if stopOnFailure and isJobFailed:
+    print("\n")
     raise Exception("Failed with status %s" % jobStatus)

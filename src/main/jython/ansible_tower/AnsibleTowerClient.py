@@ -58,7 +58,8 @@ class AnsibleTowerClient(object):
         tower_api_url = '/api/v2/jobs/%s/' % jobId
         retryCounter = 0
         success = False
-        print "Tower API URL = %s " % (tower_api_url)
+        print "Tower API URL for status call is = %s%s " % (self.httpConnection['url'],tower_api_url)
+        print ""
         while(retryCounter < 5 and not success):
             response = self.httpRequest.get(tower_api_url, contentType='application/json', headers = self.headers)
 
@@ -67,8 +68,9 @@ class AnsibleTowerClient(object):
                 return response
                 break
             elif response.getStatus() == AUTH_ERROR_STATUS:
+                print "Auth Error for Tower in the status call. will retry"
                 retryCounter+=1
-                time.sleep(60)
+                time.sleep(5)
             else:
                 print "find_record error %s" % (response)
                 self.throw_error(response)
@@ -80,7 +82,7 @@ class AnsibleTowerClient(object):
         tower_api_url = '/api/v2/jobs/%s/stdout?format=json' % jobId
         retryCounter = 0
         success = False
-        print "Tower API URL = %s " % (tower_api_url)
+        print "Tower API URL for stdout call is = %s%s " % (self.httpConnection['url'],tower_api_url)
         while(retryCounter < 5 and not success):
             response = self.httpRequest.get(tower_api_url, contentType='application/json', headers = self.headers)
 
@@ -89,8 +91,9 @@ class AnsibleTowerClient(object):
                 return response
                 break
             elif response.getStatus() == AUTH_ERROR_STATUS:
+                print "Auth Error for Tower in the stdout call. will retry"
                 retryCounter+=1
-                time.sleep(60)
+                time.sleep(5)
             else:
                 print "find_record error %s" % (response)
                 self.throw_error(response)
