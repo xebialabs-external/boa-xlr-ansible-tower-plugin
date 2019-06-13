@@ -47,6 +47,8 @@ class AnsibleTowerClient(object):
                 return response.getResponse()
                 break
             elif response.getStatus() == AUTH_ERROR_STATUS:
+                print "Auth Error for Tower in the launch call. will retry"
+                print "Detailed error: %s\n" % response.response
                 retryCounter+=1
                 time.sleep(60)
             else:
@@ -69,8 +71,9 @@ class AnsibleTowerClient(object):
                 break
             elif response.getStatus() == AUTH_ERROR_STATUS:
                 print "Auth Error for Tower in the status call. will retry"
+                print "Detailed error: %s\n" % response.response
                 retryCounter+=1
-                time.sleep(5)
+                time.sleep(60)
             else:
                 print "find_record error %s" % (response)
                 self.throw_error(response)
@@ -92,8 +95,9 @@ class AnsibleTowerClient(object):
                 break
             elif response.getStatus() == AUTH_ERROR_STATUS:
                 print "Auth Error for Tower in the stdout call. will retry"
+                print "Detailed error: %s\n" % response.response
                 retryCounter+=1
-                time.sleep(5)
+                time.sleep(60)
             else:
                 print "find_record error %s" % (response)
                 self.throw_error(response)
