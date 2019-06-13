@@ -187,14 +187,14 @@ if not execution_node == "":
             data = json.loads(tower_serverAPIStdOutResponse.getResponse())
             stdout = data["content"]
 
-            print "Status in Tower is %s." % stdout
+            print "Stdout log from Tower is %s." % stdout
 
         except ValueError, e:
             print "Tower stdout response error %s" % tower_serverAPIStdOutResponse.response
         except KeyError, e:
             print "Tower stdout response error %s" % tower_serverAPIStdOutResponse.response
     else:
-        print "Failed to get status from tower"
+        print "Failed to get stdout from tower"
         sys.exit(1)
 
 print("\n")
