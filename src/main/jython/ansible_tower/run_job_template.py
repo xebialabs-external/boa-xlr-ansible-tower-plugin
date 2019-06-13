@@ -44,7 +44,7 @@ contentRaw = {}
 
 extraVarsDict = {}
 for data in extraVars:
-    i = data.split(': ')
+    i = data.split(':')
     extraVarsDict[i[0]] = i[1]
 
 extraVarsDict['taskPassword'] = taskPassword
