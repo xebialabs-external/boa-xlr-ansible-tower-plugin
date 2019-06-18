@@ -11,6 +11,7 @@
 import time
 import json
 import sys
+import ast
 from xlrelease.HttpRequest import HttpRequest
 from ansible_tower.AnsibleTowerClient import AnsibleTowerClient
 
@@ -44,8 +45,13 @@ contentRaw = {}
 
 extraVarsDict = {}
 for data in extraVars:
-    i = data.split(':')
-    extraVarsDict[i[0]] = i[1]
+    if data.startswith('{'):
+        tmpData = ast.literal_eval(data)
+        extraVarsDict.update(tmpData)
+    else:
+        i = data.split(': ')
+        if len(i)>1:
+            extraVarsDict[i[0]] = i[1]
 
 extraVarsDict['taskPassword'] = taskPassword
 extraVarsDict['taskPasswordToken'] = taskPasswordToken
