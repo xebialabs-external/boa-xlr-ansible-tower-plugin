@@ -66,7 +66,7 @@ contentRaw['extra_vars'] = extraVarsDict
 
 content = json.dumps(contentRaw)
 
-print "Sending payload %s" % content
+#print "Sending payload %s" % content
 
 
 towerClient = AnsibleTowerClient.create_client(tower_server, username, password)
