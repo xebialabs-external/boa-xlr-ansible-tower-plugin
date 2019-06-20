@@ -30,6 +30,18 @@ from ansible_tower.AnsibleTowerClient import AnsibleTowerClient
 # otherwise we gracefully exit
 
 #
+#Get global variables.
+ansiblePluginRetryCounter = 5
+ansiblePluginAuthErrorRetryInterval = 60
+ansiblePluginJobStatusCheckInterval = 10
+global_vars = configurationApi.globalVariables
+for var in global_vars:
+    if var.key == "global.ansiblePluginJobStatusCheckInterval":
+        ansiblePluginJobStatusCheckInterval = var.value
+    if var.key == "global.ansiblePluginRetryCounter":
+        ansiblePluginRetryCounter = var.value
+    if var.key == "global.ansiblePluginAuthErrorRetryInterval":
+        ansiblePluginAuthErrorRetryInterval = var.value
 
 if tower_server is None:
     print "No server provided."
@@ -70,7 +82,7 @@ content = json.dumps(contentRaw)
 
 
 towerClient = AnsibleTowerClient.create_client(tower_server, username, password)
-tower_serverLaunchResponse = towerClient.launch(jobTemplate, content)
+tower_serverLaunchResponse = towerClient.launch(jobTemplate, content,ansiblePluginRetryCounter,ansiblePluginAuthErrorRetryInterval)
 
 jobId = ''
 
@@ -106,10 +118,11 @@ while(isJobPending):
     #need to wait unitl the execution_node value is populated.
 
     # Add a 3 second sleep between the status check calls to reduce tower server load.
-    time.sleep(10)
+
+    time.sleep(ansiblePluginJobStatusCheckInterval)
 
     if(execution_node == ""):
-        tower_serverStatusResponse = towerClient.status(jobId)
+        tower_serverStatusResponse = towerClient.status(jobId,ansiblePluginRetryCounter,ansiblePluginAuthErrorRetryInterval)
 
     else:
         print "Found Tower job execution_node = %s" % execution_node
@@ -124,7 +137,7 @@ while(isJobPending):
 
         tower_serverAPIStatusUrl = 'https://' + execution_node
         towerClient = AnsibleTowerClient.create_client({'url':tower_serverAPIStatusUrl}, tower_server['username'], tower_server['password'])
-        tower_serverStatusResponse = towerClient.status(jobId)
+        tower_serverStatusResponse = towerClient.status(jobId,ansiblePluginRetryCounter,ansiblePluginAuthErrorRetryInterval)
 
 
     if tower_serverStatusResponse is not None:
@@ -185,7 +198,7 @@ if not execution_node == "":
     tower_serverAPIStdOutUrl = 'https://' + execution_node
 
     towerClient = AnsibleTowerClient.create_client({'url':tower_serverAPIStdOutUrl}, tower_server['username'], tower_server['password'])
-    tower_serverAPIStdOutResponse = towerClient.stdout(jobId)
+    tower_serverAPIStdOutResponse = towerClient.stdout(jobId,ansiblePluginRetryCounter,ansiblePluginAuthErrorRetryInterval)
 
     if tower_serverAPIStdOutResponse is not None:
         print("\n")
