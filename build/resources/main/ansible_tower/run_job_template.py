@@ -11,6 +11,7 @@
 import time
 import json
 import sys
+import ast
 from xlrelease.HttpRequest import HttpRequest
 from ansible_tower.AnsibleTowerClient import AnsibleTowerClient
 
@@ -29,6 +30,18 @@ from ansible_tower.AnsibleTowerClient import AnsibleTowerClient
 # otherwise we gracefully exit
 
 #
+#Get global variables.
+ansiblePluginRetryCounter = 5
+ansiblePluginAuthErrorRetryInterval = 60
+ansiblePluginJobStatusCheckInterval = 10
+global_vars = configurationApi.globalVariables
+for var in global_vars:
+    if var.key == "global.ansiblePluginJobStatusCheckInterval":
+        ansiblePluginJobStatusCheckInterval = var.value
+    if var.key == "global.ansiblePluginRetryCounter":
+        ansiblePluginRetryCounter = var.value
+    if var.key == "global.ansiblePluginAuthErrorRetryInterval":
+        ansiblePluginAuthErrorRetryInterval = var.value
 
 if tower_server is None:
     print "No server provided."
@@ -44,8 +57,13 @@ contentRaw = {}
 
 extraVarsDict = {}
 for data in extraVars:
-    i = data.split(':')
-    extraVarsDict[i[0]] = i[1]
+    if data.startswith('{'):
+        tmpData = ast.literal_eval(data)
+        extraVarsDict.update(tmpData)
+    else:
+        i = data.split(': ')
+        if len(i)>1:
+            extraVarsDict[i[0]] = i[1]
 
 extraVarsDict['taskPassword'] = taskPassword
 extraVarsDict['taskPasswordToken'] = taskPasswordToken
@@ -60,11 +78,11 @@ contentRaw['extra_vars'] = extraVarsDict
 
 content = json.dumps(contentRaw)
 
-print "Sending payload %s" % content
+#print "Sending payload %s" % content
 
 
 towerClient = AnsibleTowerClient.create_client(tower_server, username, password)
-tower_serverLaunchResponse = towerClient.launch(jobTemplate, content)
+tower_serverLaunchResponse = towerClient.launch(jobTemplate, content,ansiblePluginRetryCounter,ansiblePluginAuthErrorRetryInterval)
 
 jobId = ''
 
@@ -100,10 +118,11 @@ while(isJobPending):
     #need to wait unitl the execution_node value is populated.
 
     # Add a 3 second sleep between the status check calls to reduce tower server load.
-    time.sleep(10)
+
+    time.sleep(ansiblePluginJobStatusCheckInterval)
 
     if(execution_node == ""):
-        tower_serverStatusResponse = towerClient.status(jobId)
+        tower_serverStatusResponse = towerClient.status(jobId,ansiblePluginRetryCounter,ansiblePluginAuthErrorRetryInterval)
 
     else:
         print "Found Tower job execution_node = %s" % execution_node
@@ -117,8 +136,8 @@ while(isJobPending):
             print "cli_tower_host is %s " % cli_tower_host
 
         tower_serverAPIStatusUrl = 'https://' + execution_node
-        towerClient = AnsibleTowerClient.create_client({'url':tower_serverAPIStatusUrl}, username, password)
-        tower_serverStatusResponse = towerClient.status(jobId)
+        towerClient = AnsibleTowerClient.create_client({'url':tower_serverAPIStatusUrl}, tower_server['username'], tower_server['password'])
+        tower_serverStatusResponse = towerClient.status(jobId,ansiblePluginRetryCounter,ansiblePluginAuthErrorRetryInterval)
 
 
     if tower_serverStatusResponse is not None:
@@ -178,8 +197,8 @@ if not execution_node == "":
 
     tower_serverAPIStdOutUrl = 'https://' + execution_node
 
-    towerClient = AnsibleTowerClient.create_client({'url':tower_serverAPIStdOutUrl}, username, password)
-    tower_serverAPIStdOutResponse = towerClient.stdout(jobId)
+    towerClient = AnsibleTowerClient.create_client({'url':tower_serverAPIStdOutUrl}, tower_server['username'], tower_server['password'])
+    tower_serverAPIStdOutResponse = towerClient.stdout(jobId,ansiblePluginRetryCounter,ansiblePluginAuthErrorRetryInterval)
 
     if tower_serverAPIStdOutResponse is not None:
         print("\n")
@@ -187,19 +206,20 @@ if not execution_node == "":
             data = json.loads(tower_serverAPIStdOutResponse.getResponse())
             stdout = data["content"]
 
-            print "Status in Tower is %s." % stdout
+            print "Stdout log from Tower is %s." % stdout
 
         except ValueError, e:
             print "Tower stdout response error %s" % tower_serverAPIStdOutResponse.response
         except KeyError, e:
             print "Tower stdout response error %s" % tower_serverAPIStdOutResponse.response
     else:
-        print "Failed to get status from tower"
+        print "Failed to get stdout from tower"
         sys.exit(1)
 
 print("\n")
 
 print("* [Job %s Link](%s/#/jobs/%s)" % (jobId, tower_server['url'], jobId))
 
-if stopOnFailure and not jobStatus == 'successful':
+if stopOnFailure and isJobFailed:
+    print("\n")
     raise Exception("Failed with status %s" % jobStatus)
