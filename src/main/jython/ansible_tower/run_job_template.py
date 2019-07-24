@@ -63,10 +63,13 @@ for data in extraVars:
     else:
         i = data.split(': ')
         if len(i)>1:
-            extraVarsDict[i[0]] = i[1]
+            if i[1] == taskPasswordToken:
+                extraVarsDict[i[0]] = taskPassword
+            else:
+                extraVarsDict[i[0]] = i[1]
 
-extraVarsDict['taskPassword'] = taskPassword
-extraVarsDict['taskPasswordToken'] = taskPasswordToken
+#extraVarsDict['taskPassword'] = taskPassword
+#extraVarsDict['taskPasswordToken'] = taskPasswordToken
 
 if credential:
     contentRaw['credential'] = credential
